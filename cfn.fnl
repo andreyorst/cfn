@@ -72,10 +72,10 @@ acceptable by the C compiler.
 
 ;;; Expressions
 
-(fn format-return [[_ val] format-expr]
-  (string.format "return %s;" (format-expr val)))
+(fn format-return [[_ val] state format-expr]
+  (string.format "return %s;" (format-expr val state)))
 
-(fn format-local [[type-ann name initializer &as expr] format-expr]
+(fn format-local [[type-ann name initializer &as expr] state format-expr]
   (assert-compile (= 3 (length expr))
                   (match (length expr)
                     1 (if (string? type-ann)
@@ -94,10 +94,10 @@ acceptable by the C compiler.
    "%s %s = %s;"
    type-ann
    (tostring name)
-   (format-expr initializer)))
+   (format-expr initializer state)))
 
-(fn format-body [body imports format-expr]
-  (string.format "{%s}" (table.concat (map #(format-expr $ imports) body) "\n  ")))
+(fn format-body [body state format-expr]
+  (string.format "{%s;}" (table.concat (map #(format-expr $ state) body) ";\n  ")))
 
 (fn format-math [op exprs format-expr]
   (let [op (tostring op)]
@@ -123,22 +123,22 @@ acceptable by the C compiler.
          (. exprs i)))
       _ (assert-compile false "incorrect math op usage" op))))
 
-(fn format-for [[_ bind-table & body] imports format-expr]
+(fn format-for [[_ bind-table & body] state format-expr]
   (match bind-table
     (where [type-ann name init ?cond ?how]
            (string? type-ann) (sym? name))
     (.. (string.format "for (%s %s = %s; %s; %s) "
                        type-ann name (format-expr init) (format-expr ?cond) (format-expr ?how))
-        (format-body body imports format-expr))
+        (format-body body state format-expr))
     (where [name init ?cond ?how]
            (sym? name))
     (.. (string.format "for (%s = %s; %s; %s) "
                        name (format-expr init) (format-expr ?cond) (format-expr ?how))
-        (format-body body imports format-expr))
+        (format-body body state format-expr))
     _ (let [[name cond how] bind-table]
         (.. (string.format "for (%s; %s; %s) "
                            name (format-expr cond) (format-expr how))
-            (format-body body imports format-expr)))))
+            (format-body body state format-expr)))))
 
 (fn format-set [[_ name expr] format-expr]
   (string.format "%s = %s;" (tostring name) (format-expr expr)))
@@ -148,71 +148,93 @@ acceptable by the C compiler.
       (string.match name "([%w_]+)/([%w_]+)")
       (values nil name)))
 
-(fn format-call [[callee & args] imports format-expr]
+(fn format-call [[callee & args] state format-expr]
   (let [callee (tostring callee)
         callee (or (. manglings callee) callee)
         (import callee) (split-import-sym (tostring callee))]
     (when import
-      (tset imports import true))
+      (tset state.imports import true))
+    (when (and (not= state.self callee) (not import))
+      (tset state.links callee true))
     (string.format
-     "%s(%s);"
+     "%s(%s)"
      callee
-     (table.concat (map #(format-expr $ imports) args) ", "))))
+     (table.concat (map #(format-expr $ state) args) ", "))))
 
-(fn format-val [val imports]
+(fn format-val [val state]
   (let [(import val) (split-import-sym (tostring val))]
     (when import
-      (tset imports import true))
+      (tset state.imports import true))
     val))
 
-(fn format-if [[_ & exprs] imports format-expr]
+(fn format-if [[_ & exprs] state format-expr]
   (if (= 3 (length exprs))
       (string.format "if %s %s  else %s"
-                     (format-expr (. exprs 1) imports)
-                     (format-expr (. exprs 2) imports)
-                     (format-expr (. exprs 3) imports))
+                     (format-expr (. exprs 1) state)
+                     (format-expr (. exprs 2) state)
+                     (format-expr (. exprs 3) state))
       (= 2 (length exprs))
       (string.format "if %s %s"
-                     (format-expr (. exprs 1) imports)
-                     (format-expr (. exprs 2) imports)
-                     (format-expr (. exprs 3) imports))
+                     (format-expr (. exprs 1) state)
+                     (format-expr (. exprs 2) state)
+                     (format-expr (. exprs 3) state))
       (string.format "if %s %s else %s"
-                     (format-expr (. exprs 1) imports)
-                     (format-expr (. exprs 2) imports)
-                     (format-if [:if (unpack exprs 3)] imports format-expr))))
+                     (format-expr (. exprs 1) state)
+                     (format-expr (. exprs 2) state)
+                     (format-if [:if (unpack exprs 3)] state format-expr))))
 
-(fn format-expr [expr imports]
+(fn format-let [[_ bind-table & body] state format-expr]
+  (assert-compile (= 0 (% (length bind-table) 3))
+                  "let expects binding table to have the format of [type name val]"
+                  bind-table)
+  (let [locals
+        (fcollect [i 1 (length bind-table) 3]
+          (list 'local
+                (. bind-table i)
+                (. bind-table (+ i 1))
+                (. bind-table (+ i 2))))
+        new-body '(do)]
+    (each [_ l (ipairs locals)]
+      (table.insert new-body l))
+    (each [_ f (ipairs body)]
+      (table.insert new-body f))
+    (format-expr new-body state)))
+
+(fn format-expr [expr state]
   (if (list? expr)
       (match (tostring (first expr))
         (where (or "+" "-" "/" "*" "^" "++" "--"
                    "<" ">" ">=" "<=" "==" "!="))
         (format-math (first expr)
-                     (map #(format-expr $ imports) (rest expr))
+                     (map #(format-expr $ state) (rest expr))
                      format-expr)
-        :return (format-return expr format-expr)
-        :local (format-local (rest expr) format-expr)
-        :do (format-body (rest expr) imports format-expr)
-        :for (format-for expr imports format-expr)
-        :if (format-if expr imports format-expr)
+        :return (format-return expr state format-expr)
+        :local (format-local (rest expr) state format-expr)
+        :do (format-body (rest expr) state format-expr)
+        :let (format-let expr state format-expr)
+        :for (format-for expr state format-expr)
+        :if (format-if expr state format-expr)
         :set (format-set expr format-expr)
-        _ (format-call expr imports format-expr))
+        _ (format-call expr state format-expr))
       (nil? expr) ""
       (string? expr) (view expr {:escape-newlines? true :line-length math.huge})
-      (format-val expr imports)))
+      (format-val expr state)))
 
-(fn compile-module [file-name]
-  `(os.execute
-    ,(string.format "gcc -shared -fPIC -o lib%s.so %s.c"
-                    file-name file-name)))
+(fn compile-module [file-name state]
+  `(_G.os.execute
+    ,(let [{: links} state
+           links (table.concat (icollect [l (pairs links)]
+                                 (string.format "-L./ -l%s" l)) " ")]
+       (string.format "gcc -shared -fPIC -o lib%s.so %s.c %s"
+                      file-name file-name links))))
 
-(fn write-c-file [fname declr body]
+(fn write-c-file [fname declr body state]
   `(let [fname# ,(.. fname ".c")]
      (with-open [f# (_G.io.open fname# :w)]
-       (match (f#:write ,(let [imports {}
-                               body (format-expr body imports)
-                               imports (icollect [import (pairs imports)]
+       (match (f#:write ,(let [body (format-expr body state)
+                               imports (icollect [import (pairs state.imports)]
                                          (string.format "#include <%s.h>" import))]
-                           (_G.string.format "%s\n%s %s" (table.concat imports "\n") declr body)))
+                           (string.format "%s\n%s %s" (table.concat imports "\n") declr body)))
          (nil err-msg#) (error err-msg#)))))
 
 (fn format-declaration [ret-type name arglist]
@@ -220,17 +242,18 @@ acceptable by the C compiler.
 
 (fn cfn [name ret-type arglist ...]
   (let [mangled (tostring (gensym (.. (. (ast-source name) :filename) "_" (tostring name))))
-        declr (format-declaration ret-type mangled arglist)]
+        declr (format-declaration ret-type mangled arglist)
+        state {:self mangled :imports {} :links {}}]
     (tset manglings (tostring name) mangled)
     `(local ,name
        (match (pcall require :ffi)
          (true ffi#)
-         (do ,(write-c-file mangled declr (list 'do ...))
-             (match (do ,(compile-module mangled))
+         (do ,(write-c-file mangled declr (list 'do ...) state)
+             (match (do ,(compile-module mangled state))
                true (match (pcall ffi#.load ,(string.format "./lib%s.so" mangled))
                       (true udata#)
                       (do (ffi#.cdef ,(.. declr ";"))
-                          (_G.os.execute ,(string.format "rm -f ./lib%s.so ./%s.c" mangled mangled))
+                          (_G.os.execute ,(string.format "rm -f ./%s.c" mangled))
                           (. udata# ,mangled))
                       (,(sym :_) err-msg3#) (error err-msg3#))
                (,(sym :_) err-msg2#) (error err-msg2#)))
