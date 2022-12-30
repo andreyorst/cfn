@@ -225,7 +225,7 @@ acceptable by the C compiler.
     ,(let [{: links} state
            links (table.concat (icollect [l (pairs links)]
                                  (string.format "-L./ -l%s" l)) " ")]
-       (string.format "gcc -shared -fPIC -o lib%s.so %s.c %s"
+       (string.format "gcc -shared -fPIC %s.c -o lib%s.so %s"
                       file-name file-name links))))
 
 (fn write-c-file [fname declr body state]
@@ -249,7 +249,7 @@ acceptable by the C compiler.
        (match (pcall require :ffi)
          (true ffi#)
          (do ,(write-c-file mangled declr (list 'do ...) state)
-             (match (do ,(compile-module mangled state))
+             (match (unquote (compile-module mangled state))
                true (match (pcall ffi#.load ,(string.format "./lib%s.so" mangled))
                       (true udata#)
                       (do (ffi#.cdef ,(.. declr ";"))
