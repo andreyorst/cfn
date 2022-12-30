@@ -40,11 +40,43 @@ nil
 ```
 
 This internally generates functions named `unknown_vaiv_1_` and `unknown_vaiv_2_` which are both loaded, so the old variant still can be called, if it is stored in another variable.
-Note, however, that when calling one C function from the other one, the inner calls resolve to the functions that were available when the caller was compiled:
 
+To call a C function from another C function environment variable `LD_LIBRARY_PATH` must include the working directory of where the REPL was started or where the project files that define C functions are stored.
+Note, however, that when calling one C function from the other one, the inner calls resolve to the functions that were available when the called function was compiled:
 
+```fennel
+>> (cfn a :void [] (stdio/printf "hi from a!\n"))
+nil
+>> (cfn b :void [] (a) (stdio/printf "hi from b!\n"))
+nil
+>> (a)
+hi from a!
+>> (b)
+hi from a!
+hi from b!
+```
 
-Support for dynamic redefinition requires function names to be heavily mangled, but recursion should still work as expected:
+Now, if we recompile `a`, and call `b`, it will still use the old variant of `a`:
+
+```fennel
+>> (cfn a :void [] (stdio/printf "I'm not the 'a' you've used to know!\n"))
+nil
+>> (b)
+hi from a!
+hi from b!
+```
+
+Only recompiling `b` will update what function is called:
+
+```fennel
+>> (cfn b :void [] (a) (stdio/printf "hi from b!\n"))
+nil
+>> (b)
+I'm not the 'a' you've used to know!
+hi from b!
+```
+
+Such support for dynamic redefinition requires function names to be heavily mangled, but recursion still work as expected:
 
 ```fennel
 (cfn fib :int [:int a]
@@ -55,10 +87,9 @@ Support for dynamic redefinition requires function names to be heavily mangled, 
       (return (+ (fib (- a 1)) (fib (- a 2))))))
 ```
 
-
 ### Automatic imports
 
-Automatic imports are made when code uses symbols formatted as `foo/bar`, resulting in inclusion of `#include <foo.h>` in the generated code.
+Automatic imports are made when the code uses symbols formatted as `foo/bar`, resulting in the automatic inclusion of `#include <foo.h>` in the generated code.
 In the following example, `stdio/printf` automatically generates `#include <stdio.h>` before the function definition, and `printf` is called in the body:
 
 ```fennel
@@ -80,7 +111,7 @@ nil
 
 ## Rationale
 
-Lua provides a way of interfacing with C for performance critical parts of the code.
+Lua provides a way of interfacing with C for performance-critical parts of the code.
 However, in Lua how one would access is a bit clumsy, and LuaJIT includes a more streamlined library for interfacing with C.
 So in order to interface with C one just needs their code to be compiled into a shared library, load it, and then declare a function via the `ffi.fdef` call.
 
@@ -90,7 +121,7 @@ There's still a part, where you have to write C using C syntax.
 Thus, this library also includes its own DSL for writing C using S-expressions.
 So this is not a lisp that is being compiled to C, it is plain C, just in disguise.
 
-The `cfn` macro parses the body of the function, and generates a string of C code, that is then compiled with GCC via the `os.exec` call.
+The `cfn` macro parses the body of the function and generates a string of C code, that is then compiled with GCC via the `os.exec` call.
 The result is then loaded via LuaJIT's FFI library and placed in the local variable, named after the function name.
 Here's (a bit streamlined) macroexpansion of the `(cfn vaiv :int [:int a :int b] (return (+ a b)))` definition:
 
