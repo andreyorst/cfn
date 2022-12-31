@@ -99,9 +99,10 @@ acceptable by the C compiler.
 (fn format-body [body state format-expr]
   (string.format "{%s;}" (table.concat (map #(format-expr $ state) body) ";\n  ")))
 
-(fn format-math [op exprs format-expr]
+(fn format-math [op exprs]
   (let [op (tostring op)]
     (match op
+      "not" (string.format "(! %s)" (first exprs))
       (where (or "-" "!" "++" "--") (= 1 (length exprs)))
       (string.format "(%s %s)" op (first exprs))
       (where (or "+" "-" "*"))
@@ -127,18 +128,28 @@ acceptable by the C compiler.
   (match bind-table
     (where [type-ann name init ?cond ?how]
            (string? type-ann) (sym? name))
-    (.. (string.format "for (%s %s = %s; %s; %s) "
-                       type-ann name (format-expr init) (format-expr ?cond) (format-expr ?how))
-        (format-body body state format-expr))
+    (string.format "for (%s %s = %s; %s; %s) %s"
+                   type-ann name (format-expr init) (format-expr ?cond) (format-expr ?how)
+                   (format-body body state format-expr))
     (where [name init ?cond ?how]
            (sym? name))
-    (.. (string.format "for (%s = %s; %s; %s) "
-                       name (format-expr init) (format-expr ?cond) (format-expr ?how))
-        (format-body body state format-expr))
+    (string.format "for (%s = %s; %s; %s) %s"
+                   name (format-expr init) (format-expr ?cond) (format-expr ?how)
+                   (format-body body state format-expr))
     _ (let [[name cond how] bind-table]
-        (.. (string.format "for (%s; %s; %s) "
-                           name (format-expr cond) (format-expr how))
-            (format-body body state format-expr)))))
+        (string.format "for (%s; %s; %s) %s"
+                       name (format-expr cond) (format-expr how)
+                       (format-body body state format-expr)))))
+
+(fn format-while [[_ test & body] state format-expr]
+  (string.format "while %s %s"
+                 (format-expr test state)
+                 (format-body body state format-expr)))
+
+(fn format-do-while [[_ test & body] state format-expr]
+  (string.format "do %s while %s"
+                 (format-body body state format-expr)
+                 (format-expr test state)))
 
 (fn format-set [[_ name expr] format-expr]
   (string.format "%s = %s;" (tostring name) (format-expr expr)))
@@ -183,6 +194,16 @@ acceptable by the C compiler.
                      (format-expr (. exprs 2) state)
                      (format-if [:if (unpack exprs 3)] state format-expr))))
 
+(fn format-when [[_ test & body] state format-expr]
+  (string.format "if %s %s"
+                 (format-expr test state)
+                 (format-body body state format-expr)))
+
+(fn format-when-not [[_ test & body] state format-expr]
+  (string.format "if (!%s) %s"
+                 (format-expr test state)
+                 (format-body body state format-expr)))
+
 (fn format-let [[_ bind-table & body] state format-expr]
   (assert-compile (= 0 (% (length bind-table) 3))
                   "let expects binding table to have the format of [type name val]"
@@ -204,16 +225,18 @@ acceptable by the C compiler.
   (if (list? expr)
       (match (tostring (first expr))
         (where (or "+" "-" "/" "*" "^" "++" "--"
-                   "<" ">" ">=" "<=" "==" "!="))
-        (format-math (first expr)
-                     (map #(format-expr $ state) (rest expr))
-                     format-expr)
+                   "<" ">" ">=" "<=" "==" "!=" "not" "!"))
+        (format-math (first expr) (map #(format-expr $ state) (rest expr)))
         :return (format-return expr state format-expr)
         :local (format-local (rest expr) state format-expr)
         :do (format-body (rest expr) state format-expr)
         :let (format-let expr state format-expr)
         :for (format-for expr state format-expr)
+        :while (format-while expr state format-expr)
+        :do-while (format-do-while expr state format-expr)
         :if (format-if expr state format-expr)
+        :when (format-when expr state format-expr)
+        :when-not (format-when-not expr state format-expr)
         :set (format-set expr format-expr)
         _ (format-call expr state format-expr))
       (nil? expr) ""

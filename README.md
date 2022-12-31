@@ -100,7 +100,6 @@ In the following example, `stdio/printf` automatically generates `#include <stdi
          (set res (* res i)))
        (return res)))
 nil
->> (fib 11)
 >> (fact 4)
 1
 2
@@ -154,6 +153,29 @@ This project is mostly experimental and in the early stages of development.
 Code may lead to unexpected crashes.
 
 Not all of the C syntax is supported by the parser.
+
+### Supported forms
+
+- [x] variable definition: `local`, `let`
+  - `(local :int x 0)`
+  - `(let [:int x 0 :int y (+ x 1)] body)`
+- [x] looping: `for`, `while`, `do-while`
+  - `(for [:int i 0 (< i 10) (++ i)] body)`
+  - `(while (< x 100) body)`
+  - `(do-while (< x 100) body)`
+- [x] conditions: `if`, `when`, `when-not`
+  - `(if (< a 10) (do body) (< a 20) (do body) (do body))`
+  - `(when (< a 10) body)`
+  - `(when-not (< a 10) body)`
+- [x] math and logic ops: `+`, `-`, `/`, `*`, `^`, `++`, `--`, `<`, `>`, `>=`, `<=`, `==`, `!=`, `not`, `!`
+- [x] assignment: `set`
+  - `(set a 10)`
+- [ ] field access: `.`
+  - `a.b`
+- [ ] pointer field access: `->`
+  - `a->b`
+- [ ] type definitions: `defstruct`, `union`, `typedef`
+- [ ] other things...
 
 ## License
 
